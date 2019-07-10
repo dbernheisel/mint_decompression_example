@@ -3,16 +3,21 @@ defmodule MintDecompression do
   Documentation for MintDecompression.
   """
 
-  @doc """
-  Hello world.
+  alias MintDecompression.ConnectionProcess
+  @default_scheme :https
 
-  ## Examples
+  def get(url, headers \\ []) do
+    uri = URI.parse(url)
+    uri = %{uri | scheme: String.to_atom(uri.scheme || @default_scheme)}
+    uri = %{uri | port: cond do
+      !is_nil(uri.port) -> uri.port
+      uri.scheme == "http" -> 80
+      uri.scheme == "https" -> 443
+    end}
 
-      iex> MintDecompression.hello()
-      :world
-
-  """
-  def hello do
-    :world
+    {:ok, pid} = ConnectionProcess.start_link({uri.scheme, uri.host, uri.port})
+    result = ConnectionProcess.request(pid, "GET", uri.path, headers)
+    ConnectionProcess.close(pid)
+    result
   end
 end
