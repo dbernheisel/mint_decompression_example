@@ -1,4 +1,17 @@
 defmodule MintDecompression.ConnectionProcess do
+  @moduledoc """
+  This module is largely copied from Mint's Architecture guide:
+  https://github.com/ericmj/mint/blob/d782ed6aaa9d6150a2569d6c77a2c81e5d6b32ec/pages/Architecture.md
+
+  It's then modified to:
+  1) when Mint is done with the request, look for a content-encoding header
+  2) with that header, try to decompress the body
+  3) return the decompressed body instead of the original binary body
+
+  This starts with process_response({:done, request_ref}, state) clause
+  Added decompress_data/2 and find_content_encoding/1
+  """
+
   use GenServer
   require Logger
 
@@ -84,7 +97,28 @@ defmodule MintDecompression.ConnectionProcess do
 
   defp process_response({:done, request_ref}, state) do
     {%{response: response, from: from}, state} = pop_in(state.requests[request_ref])
+    decompressed = decompress_data(response.data, find_content_encoding(response.headers))
+    response = %{response | data: decompressed}
     GenServer.reply(from, {:ok, response})
     state
+  end
+
+  defp decompress_data(data, "gzip"), do: :zlib.gunzip(data)
+  defp decompress_data(data, "x-gzip"), do: :zlib.gunzip(data)
+  defp decompress_data(data, "deflate"), do: :zlib.unzip(data)
+  defp decompress_data(data, "identity"), do: data
+  defp decompress_data(data, nil), do: data
+  defp decompress_data(data, encoding) do
+    Logger.info "Could not decompress body with #{encoding}"
+    data
+  end
+
+  defp find_content_encoding(headers) do
+    Enum.find_value(
+      headers,
+      fn {name, value} ->
+        String.downcase(name) == "content-encoding" && String.downcase(value)
+      end
+    )
   end
 end
