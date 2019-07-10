@@ -103,12 +103,12 @@ defmodule MintDecompression.ConnectionProcess do
     state
   end
 
-  defp decompress_data(data, "gzip"), do: :zlib.gunzip(data)
-  defp decompress_data(data, "x-gzip"), do: :zlib.gunzip(data)
-  defp decompress_data(data, "deflate"), do: :zlib.unzip(data)
-  defp decompress_data(data, "identity"), do: data
-  defp decompress_data(data, nil), do: data
-  defp decompress_data(data, encoding) do
+  defp decompress_data(data, []), do: data
+  defp decompress_data(data, ["gzip" | rest]), do: decompress_data(:zlib.gunzip(data), rest)
+  defp decompress_data(data, ["x-gzip" | rest]), do: decompress_data(:zlib.gunzip(data), rest)
+  defp decompress_data(data, ["deflate" | rest]), do: decompress_data(:zlib.unzip(data), rest)
+  defp decompress_data(data, ["identity" | rest]), do: decompress_data(data, rest)
+  defp decompress_data(data, [encoding | _rest]) do
     Logger.info "Could not decompress body with #{encoding}"
     data
   end
@@ -116,8 +116,15 @@ defmodule MintDecompression.ConnectionProcess do
   defp find_content_encoding(headers) do
     Enum.find_value(
       headers,
+      [],
       fn {name, value} ->
-        String.downcase(name) == "content-encoding" && String.downcase(value)
+        if String.downcase(name) == "content-encoding" do
+          value
+          |> String.downcase()
+          |> String.replace(~r|\s|, "")
+          |> String.split(",")
+          |> Enum.reverse()
+        end
       end
     )
   end
