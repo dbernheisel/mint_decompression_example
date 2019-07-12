@@ -34,6 +34,10 @@ defmodule MintDecompression.ConnectionProcess do
   @impl true
   def init({scheme, host, port}) do
     z = :zlib.open()
+    # 2nd argument is zlib's windowbits, which informs it how to extract.
+    # 15 = decompress deflate data
+    # 32 = automatically detect gzip/deflate header from data.
+    # https://stackoverflow.com/questions/29003909/why-is-a-different-zlib-window-bits-value-required-for-extraction-compared-with/29020296#29020296
     :zlib.inflateInit(z, 15 + 32)
     with {:ok, conn} <- Mint.HTTP.connect(scheme, host, port) do
       state = %__MODULE__{stream: z, conn: conn}
