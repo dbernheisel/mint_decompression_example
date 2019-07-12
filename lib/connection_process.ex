@@ -15,7 +15,7 @@ defmodule MintDecompression.ConnectionProcess do
   use GenServer
   require Logger
 
-  defstruct [:conn, requests: %{}]
+  defstruct [:conn, :stream, :encoding, requests: %{}]
 
   def start_link({scheme, host, port}) do
     GenServer.start_link(__MODULE__, {scheme, host, port})
@@ -33,8 +33,10 @@ defmodule MintDecompression.ConnectionProcess do
 
   @impl true
   def init({scheme, host, port}) do
-    with {:ok, conn} <- Mint.HTTP2.connect(scheme, host, port) do
-      state = %__MODULE__{conn: conn}
+    z = :zlib.open()
+    :zlib.inflateInit(z, 16 + 15)
+    with {:ok, conn} <- Mint.HTTP.connect(scheme, host, port) do
+      state = %__MODULE__{stream: z, conn: conn}
       {:ok, state}
     end
   end
@@ -83,34 +85,33 @@ defmodule MintDecompression.ConnectionProcess do
   end
 
   defp process_response({:headers, request_ref, headers}, state) do
-    put_in(state.requests[request_ref].response[:headers], headers)
+    state = put_in(state.requests[request_ref].response[:headers], headers)
+    put_in(state.encoding, find_content_encoding(headers))
   end
 
   defp process_response({:data, request_ref, data}, state) do
+    data =
+      if "gzip" in state.encoding do
+        {_, decompressed} = :zlib.safeInflate(state.stream, data)
+        decompressed
+      else
+        data
+      end
+
     update_in(
       state.requests[request_ref].response[:data],
       fn existing_data ->
-        (existing_data || "") <> data
+        (existing_data || []) ++ [data]
       end
     )
   end
 
   defp process_response({:done, request_ref}, state) do
     {%{response: response, from: from}, state} = pop_in(state.requests[request_ref])
-    decompressed = decompress_data(response.data, find_content_encoding(response.headers))
-    response = %{response | data: decompressed}
+    :zlib.close(state.stream)
+    response = %{response | data: Enum.join(response.data, "")}
     GenServer.reply(from, {:ok, response})
     state
-  end
-
-  defp decompress_data(data, []), do: data
-  defp decompress_data(data, ["gzip" | rest]), do: decompress_data(:zlib.gunzip(data), rest)
-  defp decompress_data(data, ["x-gzip" | rest]), do: decompress_data(:zlib.gunzip(data), rest)
-  defp decompress_data(data, ["deflate" | rest]), do: decompress_data(:zlib.unzip(data), rest)
-  defp decompress_data(data, ["identity" | rest]), do: decompress_data(data, rest)
-  defp decompress_data(data, [encoding | _rest]) do
-    Logger.info "Could not decompress body with #{encoding}"
-    data
   end
 
   defp find_content_encoding(headers) do
