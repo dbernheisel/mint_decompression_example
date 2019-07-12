@@ -34,7 +34,7 @@ defmodule MintDecompression.ConnectionProcess do
   @impl true
   def init({scheme, host, port}) do
     z = :zlib.open()
-    :zlib.inflateInit(z, 16 + 15)
+    :zlib.inflateInit(z, 15 + 32)
     with {:ok, conn} <- Mint.HTTP.connect(scheme, host, port) do
       state = %__MODULE__{stream: z, conn: conn}
       {:ok, state}
@@ -90,13 +90,7 @@ defmodule MintDecompression.ConnectionProcess do
   end
 
   defp process_response({:data, request_ref, data}, state) do
-    data =
-      if "gzip" in state.encoding do
-        {_, decompressed} = :zlib.safeInflate(state.stream, data)
-        decompressed
-      else
-        data
-      end
+    data = Enum.reduce(state.encoding, data, &decompress(&1, &2, state.stream))
 
     update_in(
       state.requests[request_ref].response[:data],
@@ -105,6 +99,14 @@ defmodule MintDecompression.ConnectionProcess do
       end
     )
   end
+
+  defp decompress(nil, data, _stream), do: data
+  defp decompress("identity", data, _stream), do: data
+  defp decompress(compression, data, stream) when compression in ["gzip", "deflate", "x-gzip"] do
+    {_, decompressed} = :zlib.safeInflate(stream, data)
+    decompressed
+  end
+  defp decompress(_compression, data, _stream), do: data
 
   defp process_response({:done, request_ref}, state) do
     {%{response: response, from: from}, state} = pop_in(state.requests[request_ref])
